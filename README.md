@@ -40,8 +40,8 @@
 
 ### Test OpenCV installation
   - python3
-  - >> import cv2
-  - >> cv2.__version__
+    -  >> import cv2
+    - >> cv2.__version__
     - will output the version ('4.5.3') or your installed version
     
 ### Run code
