@@ -47,7 +47,7 @@
 ### Run code
 
 Ensure that you have clone the repository to the raspberry pi:
-  - `git clone [http addr]`
+  - `git clone https://github.com/chuanisawesome/first_response.git`
 
 Once everything is confirmed go into the counter directory and run `python3 people_counter.py`
 
