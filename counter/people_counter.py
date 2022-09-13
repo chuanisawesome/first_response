@@ -13,7 +13,7 @@ from threading import Thread
 NMS_THRESHOLD = 0.3
 MIN_CONFIDENCE = 0.2
 
-def human_detection(image, model, layer_name, personidz=0):
+def human_detection(image, model, layer_name, ):
     (H, W) = image.shape[:2]
     results = []
 
