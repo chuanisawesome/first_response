@@ -40,6 +40,8 @@ personidz=0
 NMS_THRESHOLD = 0.3
 MIN_CONFIDENCE = 0.2
 
+font = cv2.FONT_HERSHEY_PLAIN
+
 # instantiate our centroid tracker, then initialize a list to store
 # each of our dlib correlation trackers, followed by a dictionary to
 # map each unique object ID to a Trackable Object
@@ -62,7 +64,7 @@ raw_capture = PiRGBArray(camera, size=(resX, resY))
 time.sleep(0.1)
 print("[INFO] warming up camera")
 
-# load the model
+# load the model person detection
 labelsPath = "coco.names"
 LABELS = open(labelsPath).read().strip().split("\n")
 
@@ -84,11 +86,83 @@ layer_name = [
 cap = cv2.VideoCapture(0)
 writer = None
 
+# load the model gun detection
+labelsPath_g = "gun_dtect_model/obj.names"
+LABELS_G = open(labelsPath_g).read().strip().split("\n")
+
+weights_path_g = "gun_dtect_model/yolov4.weights"
+config_path_g = "gun_dtect_model/yolov4-g.cfg"
+
+model_g = cv2.dnn.readNetFromDarknet(config_path_g, weights_path_g)
+
+layer_name_g = model_g.getLayerNames()
+layer_name_g = [
+    layer_name_g[i[0] - 1] for i in model_g.getUnconnectedOutLayers()
+]
+
+def gun_detection(image, model_g, layer_name_g, personidz=0):
+    (H, W) = image.shape[:2]
+    results = []
+
+    blob = cv2.dnn.blobFromImage(image, 1 / 255.0, (416, 416), swapRB=True, crop=False)
+    model_g.setInput(blob)
+    layerOutputs_g = model_g.forward(layer_name_g)
+
+    boxes = []
+    class_ids = []
+    confidences = []
+
+    for output in layerOutputs_g:
+        for detection in output:
+
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+
+            if confidence > 0.98:
+                # Calculating coordinates
+                center_x = int(detection[0] * W)
+                center_y = int(detection[1] * H)
+                w = int(detection[2] * W)
+                h = int(detection[3] * H)
+
+				# Rectangle coordinates
+                x = int(center_x - w / 2)
+                y = int(center_y - h / 2)
+
+                boxes.append([x, y, w, h])
+                confidences.append(float(confidence))
+                class_ids.append(class_id)
+    
+    indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.8, 0.3)
+    #Draw boxes around detected objects
+    for i in range(len(boxes)):
+        if i in indexes:
+            x, y, w, h = boxes[i]
+            label = str(LABELS_G[class_ids[i]])
+            confidence = confidences[i]
+            color = (256, 0, 0)
+            cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
+            cv2.putText(image, label + " {0:.1%}".format(confidence), (x, y - 20), font, 3, color, 3)
+
+            # update our results list to consist of the person
+            # prediction probability, bounding box coordinates,
+            # and the centroid
+            res = (confidence, (x, y, x + w, y + h), label)
+            results.append(res)
+    # return the list of results
+    return results
+
 # capture frames from the camera
 for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port=True):
 
     image = frame.array
     (H, W) = image.shape[:2]
+
+    results = gun_detection(
+        image, model_g, layer_name_g, personidz=LABELS_G.index("Handgun")
+    )
+    print("gun detection reached")
 
     # initialize the current status along with our list of bounding
     # box rectangles returned by either (1) our object detector or
@@ -96,6 +170,7 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
     status = "Waiting"
     rects = []
     
+    # running the detection model
     blob = cv2.dnn.blobFromImage(image, 1 / 255.0, (416, 416), swapRB=True, crop=False)
     model.setInput(blob)
     layerOutputs = model.forward(layer_name)
@@ -109,7 +184,11 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
         status = "Detecting"
         trackers = []
         print("status" + status)
-        
+    
+    boxes = []
+    cent = []
+    confidences = []
+
     for output in layerOutputs:
         for detection in output:
 
@@ -126,19 +205,16 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
                 print(confidence)
                 print(LABELS[idx])
 
-                box = detection[0:4]
+                box = detection[0:4] * np.array([W, H, W, H])
                 (startX, startY, endY, endX) = box.astype("int")
-                # left = detection[0] * np.array([W])
-                # top = detection[1] * np.array([H])
-                # rightt = detection[2] * np.array([W])
-                # bottom = detection[3] * np.array([H])
-                # print(left, top, rightt, bottom)
+                
 
-                # print("startX" + str(startX))
-                # print("startY" + str(startY))
-                # print("endX" + str(endX))
-                # print("endY" + str(endY))
-                # print(box)
+                x = int(startX - (endY / 2))
+                y = int(startY - (endX / 2))
+
+                boxes.append([x, y, int(endY), int(endX)])
+                cent.append((startX, startY))
+                confidences.append(float(confidence))
 
                 # construct a dlib rectangle object from the bounding
                 # box coordinates and then start the dlib correlation
@@ -151,6 +227,7 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
                 # add the tracker to our list of trackers so we can
                 # utilize it during skip frames
                 trackers.append(tracker)
+                # apply non-maxima suppression to suppress weak, overlapping
 
     # otherwise, we should utilize our object *trackers* rather than
     # object *detectors* to obtain a higher frame processing throughput
@@ -259,8 +336,7 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
     # show the output frame
     cv2.putText(image, datetime.datetime.now().strftime("%A %d %B %Y %I:%M:%S%p"),
             (10, image.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
-    # cv2.imwrite("FLY.png", image)
-    cv2.imshow("People Counter", image)
+    cv2.imwrite("FLY.png", image)
     key = cv2.waitKey(1) & 0xFF
 
     # clear the stream in preparation for the next frame
